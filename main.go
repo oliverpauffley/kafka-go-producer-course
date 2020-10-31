@@ -120,8 +120,9 @@ func NewKafkaProducer(kafkaAddress, topic string) (*kafka.Writer, error) {
 	}
 
 	return kafka.NewWriter(kafka.WriterConfig{
-		Brokers:  []string{kafkaAddress},
-		Topic:    topic,
-		Balancer: &kafka.LeastBytes{},
+		Brokers:      []string{kafkaAddress},
+		Topic:        topic,
+		Balancer:     &kafka.LeastBytes{},
+		RequiredAcks: 1,
 	}), nil
 }
