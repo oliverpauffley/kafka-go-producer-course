@@ -2,13 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/dghubble/go-twitter/twitter"
-	"github.com/dghubble/oauth1"
 	"github.com/segmentio/kafka-go"
 )
 
@@ -40,9 +40,14 @@ func main() {
 		log.Fatal("must set env var 'KAFKA_TOPIC'")
 	}
 
+	twitterFilter, ok := os.LookupEnv("TWITTER_FILTER")
+	if !ok {
+		log.Fatal("must set env var 'TWITTER_FILTER'")
+	}
+
 	twitterClient := NewTwitterClient(twitterKey, twitterSecret, twitterToken, twitterTokenSecret)
 
-	stream, err := NewTwitterStream(twitterClient, "kafka")
+	stream, err := NewTwitterStream(twitterClient, twitterFilter)
 	if err != nil {
 		log.Fatalf("error creating twitter stream, error: %s", err)
 	}
@@ -56,12 +61,19 @@ func main() {
 	// currently we only care about tweets
 	demux := twitter.NewSwitchDemux()
 	demux.Tweet = func(tweet *twitter.Tweet) {
-		log.Println(tweet)
 
-		err := kafkaWriter.WriteMessages(context.Background(),
+		jsonTweet, err := json.Marshal(tweet)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		log.Println(tweet.IDStr)
+		log.Println(tweet.Text)
+
+		err = kafkaWriter.WriteMessages(context.Background(),
 			kafka.Message{
-				Key:   []byte(tweet.User.ScreenName),
-				Value: []byte(tweet.Text),
+				Key:   []byte(tweet.IDStr),
+				Value: []byte(jsonTweet),
 			},
 		)
 		if err != nil {
@@ -81,48 +93,4 @@ func main() {
 	stream.Stop()
 	kafkaWriter.Close()
 
-}
-
-func NewTwitterClient(twitterKey, twitterSecret, accessToken, accessSecret string) *twitter.Client {
-	// create a twitter client
-	config := oauth1.NewConfig(twitterKey, twitterSecret)
-	token := oauth1.NewToken(accessToken, accessSecret)
-
-	httpClient := config.Client(oauth1.NoContext, token)
-	return twitter.NewClient(httpClient)
-}
-
-func NewTwitterStream(client *twitter.Client, filter string) (*twitter.Stream, error) {
-	params := &twitter.StreamFilterParams{
-		Track:         []string{filter},
-		StallWarnings: twitter.Bool(true),
-	}
-	stream, err := client.Streams.Filter(params)
-	if err != nil {
-		return nil, err
-	}
-	return stream, nil
-}
-
-func NewKafkaProducer(kafkaAddress, topic string) (*kafka.Writer, error) {
-	conn, err := kafka.Dial("tcp", kafkaAddress)
-	if err != nil {
-		return nil, err
-	}
-
-	err = conn.CreateTopics(kafka.TopicConfig{
-		Topic:             topic,
-		NumPartitions:     6,
-		ReplicationFactor: 1,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return kafka.NewWriter(kafka.WriterConfig{
-		Brokers:      []string{kafkaAddress},
-		Topic:        topic,
-		Balancer:     &kafka.LeastBytes{},
-		RequiredAcks: 1,
-	}), nil
 }
